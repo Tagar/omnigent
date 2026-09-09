@@ -111,6 +111,31 @@ def test_unknown_read_provider_fails_loudly(tool_ctx: ToolContext) -> None:
     assert "jina" in result.lower()
 
 
+@pytest.mark.parametrize("provider", ["Jina", "JINA", "  jina  "])
+def test_read_provider_is_case_and_whitespace_insensitive(
+    tool_ctx: ToolContext, provider: str
+) -> None:
+    """
+    ``read_provider`` is normalized (trimmed + lowercased) before lookup, so a
+    natural capitalization like ``Jina`` resolves rather than failing as unknown.
+    """
+    fake_response = MagicMock()
+    fake_response.text = "Hello world."
+    tool = WebReadTool(config={"read_provider": provider})
+    with patch("omnigent.tools.builtins.web_read_jina.httpx.get") as mock_get:
+        mock_get.return_value = fake_response
+        result = tool.invoke(json.dumps({"url": "https://example.com"}), tool_ctx)
+    assert not result.startswith("web_read error:")
+    assert "Hello world." in result
+
+
+def test_unknown_read_provider_echoes_original_spelling(tool_ctx: ToolContext) -> None:
+    """An unknown provider is echoed back as the user spelled it (post-normalization lookup)."""
+    tool = WebReadTool(config={"read_provider": "Bogus"})
+    result = tool.invoke(json.dumps({"url": "https://example.com"}), tool_ctx)
+    assert result.startswith("web_read error: unknown read_provider 'Bogus'")
+
+
 # ── config-key validation (no silent-ignore footgun) ─
 
 
@@ -272,6 +297,61 @@ def test_nimble_falls_back_to_html_when_markdown_absent(tool_ctx: ToolContext) -
         result = tool.invoke(json.dumps({"url": "https://example.com"}), tool_ctx)
 
     assert "<p>Body.</p>" in result
+
+
+def test_nimble_empty_markdown_falls_back_to_html(tool_ctx: ToolContext) -> None:
+    """
+    An empty ``data.markdown`` (present but blank — e.g. Readability stripped
+    everything) must not mask real content in ``data.html``: the reader falls
+    back to the non-empty field rather than reporting "no content".
+    """
+    fake_response = MagicMock()
+    fake_response.json.return_value = {"data": {"markdown": "", "html": "<p>real content</p>"}}
+
+    tool = WebReadTool(config={"read_provider": "nimble", "api_key": "k"})
+    with patch("omnigent.tools.builtins.web_read_nimble.httpx.post") as mock_post:
+        mock_post.return_value = fake_response
+        result = tool.invoke(json.dumps({"url": "https://example.com"}), tool_ctx)
+
+    assert "real content" in result
+    assert "no content extracted" not in result
+
+
+def test_nimble_short_page_mentioning_cdn_is_not_blocked(tool_ctx: ToolContext) -> None:
+    """
+    A short legitimate page that merely mentions a CDN name (a "secured by
+    Cloudflare" footer) is NOT a challenge page and its content is returned —
+    block detection matches challenge-page phrases, not bare vendor names.
+    """
+    body = "Status: all systems operational. Secured by Cloudflare. Updated 2m ago."
+    assert len(body) < 500
+    fake_response = MagicMock()
+    fake_response.json.return_value = {"data": {"markdown": body}}
+
+    tool = WebReadTool(config={"read_provider": "nimble", "api_key": "k"})
+    with patch("omnigent.tools.builtins.web_read_nimble.httpx.post") as mock_post:
+        mock_post.return_value = fake_response
+        result = tool.invoke(json.dumps({"url": "https://example.com"}), tool_ctx)
+
+    assert "challenge/denied response" not in result
+    assert "all systems operational" in result
+
+
+def test_nimble_detects_cloudflare_challenge_page(tool_ctx: ToolContext) -> None:
+    """A genuine Cloudflare block interstitial is still detected as a challenge."""
+    body = (
+        "Sorry, you have been blocked. Checking your browser before access. Cloudflare Ray ID: 8a."
+    )
+    assert len(body) < 500
+    fake_response = MagicMock()
+    fake_response.json.return_value = {"data": {"markdown": body}}
+
+    tool = WebReadTool(config={"read_provider": "nimble", "api_key": "k"})
+    with patch("omnigent.tools.builtins.web_read_nimble.httpx.post") as mock_post:
+        mock_post.return_value = fake_response
+        result = tool.invoke(json.dumps({"url": "https://example.com"}), tool_ctx)
+
+    assert "challenge/denied response" in result
 
 
 def test_nimble_html_format_prefers_data_html(tool_ctx: ToolContext) -> None:
@@ -529,6 +609,17 @@ def test_firecrawl_accepts_enhanced_proxy(tool_ctx: ToolContext) -> None:
         mock_post.return_value = fake_response
         tool.invoke(json.dumps({"url": "https://example.com"}), tool_ctx)
     assert mock_post.call_args.kwargs["json"]["proxy"] == "enhanced"
+
+
+def test_firecrawl_accepts_stealth_proxy(tool_ctx: ToolContext) -> None:
+    """``stealth`` (Firecrawl's legacy name for ``enhanced``) is accepted and passed through."""
+    fake_response = MagicMock()
+    fake_response.json.return_value = {"success": True, "data": {"markdown": "body"}}
+    tool = WebReadTool(config={"read_provider": "firecrawl", "api_key": "k", "proxy": "stealth"})
+    with patch("omnigent.tools.builtins.web_read_firecrawl.httpx.post") as mock_post:
+        mock_post.return_value = fake_response
+        tool.invoke(json.dumps({"url": "https://example.com"}), tool_ctx)
+    assert mock_post.call_args.kwargs["json"]["proxy"] == "stealth"
 
 
 def test_firecrawl_missing_success_treated_as_failure(tool_ctx: ToolContext) -> None:

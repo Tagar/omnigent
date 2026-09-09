@@ -13,7 +13,7 @@ Configured in the agent spec::
           read_provider: firecrawl
           api_key: ${FIRECRAWL_API_KEY}
           # optional:
-          # proxy: auto            # basic | enhanced | auto (default; escalates for reliability)
+          # proxy: auto            # basic | enhanced | auto (default); stealth = enhanced alias
 
 See https://docs.firecrawl.dev/api-reference/endpoint/scrape
 """
@@ -27,9 +27,12 @@ import httpx
 
 _DEFAULT_BASE_URL = "https://api.firecrawl.dev"
 # Proxy tier, escalating: ``basic`` (datacenter) -> ``enhanced`` (residential,
-# higher reliability) -> ``auto`` (start basic, escalate to enhanced if needed).
+# higher reliability) -> ``auto`` (default; start basic, escalate to enhanced if
+# needed). ``stealth`` is Firecrawl's legacy name for the ``enhanced`` tier and
+# is still honored by the API, so we accept it too (passed through verbatim)
+# rather than reject a tier a user copied from an older example.
 _DEFAULT_PROXY = "auto"
-_VALID_PROXIES = frozenset({"basic", "enhanced", "auto"})
+_VALID_PROXIES = frozenset({"basic", "enhanced", "stealth", "auto"})
 _DEFAULT_TIMEOUT_S = 120.0
 
 

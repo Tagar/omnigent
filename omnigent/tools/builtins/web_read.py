@@ -192,13 +192,17 @@ def _read(url: str, config: dict[str, str]) -> str:
     :returns: Extracted content, or an error message (including when no
         ``read_provider`` is configured).
     """
-    backend = config.get("read_provider")
-    if not backend:
+    provider = config.get("read_provider")
+    if not isinstance(provider, str) or not provider.strip():
         return f"web_read error: no read_provider configured. {_backend_hint()}"
+    # Normalize case/whitespace so "Jina" or " jina " resolve like "jina" — the
+    # registry keys are canonical lowercase. The original spelling is kept for
+    # the error message so a genuine typo is echoed back as the user wrote it.
+    backend = provider.strip().lower()
 
     engine = _BACKENDS.get(backend)
     if engine is None:
-        return f"web_read error: unknown read_provider {backend!r}. {_backend_hint()}"
+        return f"web_read error: unknown read_provider {provider!r}. {_backend_hint()}"
 
     key_error = _check_config_keys(backend, engine, config)
     if key_error is not None:

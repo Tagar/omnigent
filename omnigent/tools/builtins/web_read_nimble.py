@@ -72,7 +72,10 @@ _DEFAULT_TIMEOUT_S = 120.0
 
 # Substrings that indicate the target site returned a challenge/denied response
 # instead of the page, so the tool can report that rather than handing the
-# model a challenge page as if it were real content.
+# model a challenge page as if it were real content. These are challenge-page
+# *phrases*, not bare vendor names: a short legitimate page can mention a CDN
+# (e.g. a "secured by Cloudflare" footer) without being a block page, so we match
+# the wording that only a challenge/block interstitial actually renders.
 _BLOCK_MARKERS = (
     "captcha",
     "access denied",
@@ -80,8 +83,10 @@ _BLOCK_MARKERS = (
     "verify you are human",
     "unusual traffic",
     "request unsuccessful",
-    "cloudflare",
-    "attention required",
+    "you have been blocked",
+    "checking your browser",
+    "enable cookies and reload",
+    "cloudflare ray id",
 )
 
 
@@ -196,10 +201,12 @@ def _format_read(
 
     The page body lives under ``data`` as ``data.markdown`` / ``data.html``. We
     read the field matching the format we requested, falling back to the other
-    if it is absent, using "first present" (not "first truthy") so a
-    legitimately empty page doesn't get masked. A body that is only a block
-    marker (captcha/denied) is reported as a challenge response so the model
-    doesn't treat it as real content.
+    when the requested field is missing *or empty* — using "first non-empty" so
+    an empty ``markdown`` (e.g. Readability stripped everything) doesn't mask
+    real content sitting in ``html``. If both are empty the page is reported as
+    having no content. A body that is only a block marker (captcha/denied) is
+    reported as a challenge response so the model doesn't treat it as real
+    content.
 
     :param payload: The parsed JSON response.
     :param url: The requested URL (for the blocked-message text).
@@ -211,16 +218,18 @@ def _format_read(
         truncation is applied by the dispatcher, not here.
     """
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    # Prefer the format we asked for; fall back to the other if it's missing.
-    # "First present" (not None), so an empty string (empty page) isn't skipped.
+    # Prefer the format we asked for; fall back to the other when the requested
+    # field is missing or empty. "First non-empty" (not "first present") so an
+    # empty ``markdown`` field doesn't mask real content in ``html``.
     other = "html" if output_format == "markdown" else "markdown"
-    raw: object = ""
+    content = ""
     for candidate in (data.get(output_format), data.get(other)):
-        if candidate is not None:
-            raw = candidate
+        if candidate is None:
+            continue
+        text = (candidate if isinstance(candidate, str) else str(candidate)).strip()
+        if text:
+            content = text
             break
-    content = raw if isinstance(raw, str) else str(raw)
-    content = content.strip()
 
     if not content:
         return None, (
