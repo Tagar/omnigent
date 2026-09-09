@@ -85,6 +85,35 @@ def test_non_http_url_rejected(tool_ctx: ToolContext, url: str) -> None:
     assert "Error" in result and "http" in result.lower()
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:pass@example.com/page",
+        "https://user@example.com/page",
+        "http://admin:secret@internal.host/",
+    ],
+)
+def test_url_with_embedded_credentials_rejected(tool_ctx: ToolContext, url: str) -> None:
+    """
+    A URL carrying userinfo is rejected before any backend call — otherwise the
+    credentials would be sent to the third-party retrieval service and echoed
+    back in the Source header.
+    """
+    tool = WebReadTool(config={"read_provider": "jina"})
+    result = tool.invoke(json.dumps({"url": url}), tool_ctx)
+    assert result.startswith("Error:") and "credential" in result.lower()
+
+
+def test_url_with_lone_surrogate_rejected(tool_ctx: ToolContext) -> None:
+    """
+    A non-UTF-8-encodable URL (lone surrogate) is rejected up front rather than
+    raising deep in a backend, preserving the never-raises contract.
+    """
+    tool = WebReadTool(config={"read_provider": "jina"})
+    result = tool.invoke(json.dumps({"url": "https://example.com/\ud800"}), tool_ctx)
+    assert result.startswith("Error:") and "invalid characters" in result
+
+
 # ── No read_provider set ───────────────────────────
 
 

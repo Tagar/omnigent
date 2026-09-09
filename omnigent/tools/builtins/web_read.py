@@ -37,6 +37,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 from omnigent.tools.base import Tool, ToolContext
 from omnigent.tools.builtins._arguments import parse_json_object_arguments
@@ -174,6 +175,23 @@ class WebReadTool(Tool):
         # break the "Source:" header line and let a caller forge a second one.
         if any(ch.isspace() or ord(ch) < 0x20 for ch in url):
             return "Error: 'url' must not contain spaces or control characters."
+        # A lone surrogate slips past the control-char check (ord > 0x20) but
+        # can't be UTF-8 encoded — it would raise deep in a backend (jina's
+        # quote(), or the JSON request body) instead of returning a diagnostic,
+        # breaking the never-raises contract. Reject it here.
+        try:
+            url.encode("utf-8")
+        except UnicodeEncodeError:
+            return "Error: 'url' contains invalid characters."
+        # Reject credentials embedded in the URL (https://user:pass@host): they
+        # would be forwarded verbatim to the third-party retrieval backend and
+        # echoed back in the Source header. A page URL never needs userinfo.
+        try:
+            netloc = urlsplit(url).netloc
+        except ValueError:
+            return "Error: 'url' is not a valid URL."
+        if "@" in netloc:
+            return "Error: 'url' must not embed credentials (user:pass@host)."
 
         return _read(url, self._config)
 
